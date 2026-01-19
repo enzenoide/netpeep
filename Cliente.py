@@ -77,7 +77,7 @@ class MonitorarSistema:
             finally:
                 conn.close()
     def run(self):
-        print(f"Agente iniciado...")
+        print(f"Agente iniciado....")
         while True:
             
             pacote = {

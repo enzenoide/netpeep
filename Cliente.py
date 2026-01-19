@@ -20,4 +20,17 @@ class MonitorarSistema:
     def sistema_op(self):
         return platform.system()
     def interfaces(self):
-        
+        interface = psutil.net_if_addrs()
+        stats = psutil.net_if_stats()
+
+        for nome, info in interface.items():
+            if stats[nome].isup:
+                status = "UP"
+            else:
+                status = "DOWN"
+            print(f"Interface: {nome} [{status}]/ IP: {}")
+            for endereco in info:
+                if endereco.family == 2: 
+                    print(f"IP: {endereco.address}") 
+                if endereco.family == -1: 
+                    print(f"MAC: {endereco.address}") 

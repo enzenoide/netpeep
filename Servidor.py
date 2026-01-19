@@ -1,7 +1,7 @@
 import socket
 import threading
 import time
-
+import json
 BROADCAST_PORT = 50000
 
 
@@ -60,32 +60,39 @@ class DiscoveryServer:
     # ----------------------------------------------------------------
     # SOLICITA MAC via TCP
     # ----------------------------------------------------------------
-    def ask_mac_tcp(self, key):
-        """
-        key = (ip, tcp_port)
-        """
+    def solicitar_inventario(self, key):
         if key not in self.clients:
             print("Cliente não encontrado!")
             return
 
         ip, port = key
-        print(f"[Servidor] Conectando via TCP em {ip}:{port} ...")
+        print(f"\n[Servidor] Solicitando inventário completo de {ip}:{port}...")
 
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)
             sock.connect((ip, port))
 
-            sock.send(b"GET_MAC")
-            response = sock.recv(1024).decode()
+            
+            sock.send(b"GET_INVENTORY") 
+            
+            
+            response = sock.recv(8192).decode()
             sock.close()
+            
+            dados = json.loads(response)
 
-            if response.startswith("MAC_ADDRESS;"):
-                mac = response.split(";")[1]
-                self.clients[key].mac = mac
-                print(f"[MAC recebido via TCP] {ip}:{port} => {mac}")
+            print(f"\n--- DETALHES DO CLIENTE ({ip}) ---")
+            print(f"Sistema Operacional: {dados.get('OS')}")
+            print(f"Núcleos de CPU:      {dados.get('cores')}")
+            print(f"Memória RAM Livre:   {dados.get('ram') / (1024**3):.2f} GB")
+            print(f"Espaço em Disco:     {dados.get('disco') / (1024**3):.2f} GB")
+            print(f"Interfaces de Rede:")
+            for rede in dados.get('redes', []):
+                print(f"  - {rede['nome']}: IP {rede['ip']} | Status: {rede['status']}")
 
         except Exception as e:
-            print(f"Erro ao conectar via TCP: {e}")
+            print(f"Erro ao obter inventário: {e}")
 
     # ----------------------------------------------------------------
     # MENU COM match-case
@@ -108,11 +115,11 @@ class DiscoveryServer:
                 case "2":
                     ip = input("Digite o IP: ")
                     port = int(input("Digite a porta TCP do cliente: "))
-                    self.ask_mac_tcp((ip, port))
+                    self.solicitar_inventario((ip, port))
 
                 case "3":
                     for key in self.clients:
-                        self.ask_mac_tcp(key)
+                        self.solicitar_inventario(key)
 
                 case "0":
                     exit()

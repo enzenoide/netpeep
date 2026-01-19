@@ -28,7 +28,7 @@ class MonitorarSistema:
                 status = "UP"
             else:
                 status = "DOWN"
-            print(f"Interface: {nome} [{status}]/ IP: {}")
+            print(f"Interface: {nome} [{status}]")
             for endereco in info:
                 if endereco.family == 2: 
                     print(f"IP: {endereco.address}") 

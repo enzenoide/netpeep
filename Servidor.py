@@ -93,16 +93,16 @@ class DiscoveryServer:
             print(f"{'INTERFACE':<20} | {'STATUS':<6} | {'TIPO':<10} | {'IP'}")
             print("-" * 60)
 
-            # IMPORTANTE: A chave correta é 'interfaces', conforme definido no seu cliente
+           
             lista_interfaces = dados.get('interfaces', [])
             for rede in lista_interfaces:
                 nome = rede.get('nome', 'N/A')
                 status = rede.get('status', 'N/A')
                 tipo = rede.get('tipo', 'N/A')
-                # No seu cliente a chave de IP está em maiúsculo "IP"
+                
                 ip_addr = rede.get('IP') if rede.get('IP') else "Sem IP"
                 
-                # Alinhamos as colunas usando < (esquerda) e o número de espaços
+                
                 print(f"{nome[:30]:<25} | {status:<6} | {tipo:<10} | {ip_addr}")
 
             print("="*60 + "\n")
@@ -125,8 +125,14 @@ class DiscoveryServer:
             match op:
                 case "1":
                     print("\n--- CLIENTES ---")
-                    for key, info in self.clients.items():
-                        print(f"{key} -> {info}")
+                    agora = time.time()
+                    for key,info in self.clients.items():
+                        atraso = agora - info.last_seen
+                        if atraso < 30:
+                            status = "ONLINE"
+                        else:
+                            status = "OFFLINE"
+                        print(f"IP: {info.ip}:{info.port:<10} | {status:<10} | {status}s")
 
                 case "2":
                     ip = input("Digite o IP: ")

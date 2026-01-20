@@ -79,6 +79,8 @@ class DiscoveryServer:
             sock.close()
             
             dados = json.loads(response)
+            disco_valor = dados.get('disco')
+            self.clients[key].ultimo_disco = disco_valor
 
             print("\n" + "="*60)
             print(f"       RELATÓRIO DE INVENTÁRIO - {ip}")
@@ -109,7 +111,37 @@ class DiscoveryServer:
 
         except Exception as e:
             print(f"Erro ao obter inventário: {e}")
+    def calcular_media(self):
+        soma = 0
+        offline = 0
+        online = 0
+        contagem_dispositivos = 0
+        agora = time.time()
 
+        for dados in self.clients.values():
+            tempo = agora - dados.last_seen
+
+            if tempo > 30:
+                offline += 1
+            else:
+                online += 1
+            valor_disco = getattr(dados,'ultimo_disco',None)
+            if valor_disco is not None:
+                soma += valor_disco
+                contagem_dispositivos += 1
+        print("\n" + "="*45)
+        print("      📊 RESUMO GERAL DA REDE")
+        print("="*45)
+        print(f"Dispositivos Online:  {online}")
+        print(f"Dispositivos Offline: {offline}")
+        print("-" * 45)
+
+        if contagem_dispositivos > 0:
+            media = (soma / contagem_dispositivos) / (1024**3)
+            print(f"Média de Disco Livre: {media:.2f} GB")
+            print(f"(Baseado em {contagem_dispositivos} clientes com dados)")
+        else:
+            print("A rede não possui nenhum cliente")
     # ----------------------------------------------------------------
     # MENU COM match-case
     # ----------------------------------------------------------------
@@ -142,7 +174,8 @@ class DiscoveryServer:
                 case "3":
                     for key in self.clients:
                         self.solicitar_inventario(key)
-
+                case "4":
+                        self.calcular_media()
                 case "0":
                     exit()
 

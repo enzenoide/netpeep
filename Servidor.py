@@ -80,14 +80,32 @@ class DiscoveryServer:
             
             dados = json.loads(response)
 
-            print(f"\n--- DETALHES DO CLIENTE ({ip}) ---")
+            print("\n" + "="*60)
+            print(f"       RELATÓRIO DE INVENTÁRIO - {ip}")
+            print("="*60)
             print(f"Sistema Operacional: {dados.get('SO')}")
             print(f"Núcleos de CPU:      {dados.get('cpu')}")
             print(f"Memória RAM Livre:   {dados.get('ram') / (1024**3):.2f} GB")
             print(f"Espaço em Disco:     {dados.get('disco') / (1024**3):.2f} GB")
-            print(f"Interfaces de Rede:")
-            for rede in dados.get('redes', []):
-                print(f"  - {rede['nome']}: IP {rede['ip']} | Status: {rede['status']}")
+            print("-" * 60)
+            
+            # --- FORMATAÇÃO DAS INTERFACES ---
+            print(f"{'INTERFACE':<20} | {'STATUS':<6} | {'TIPO':<10} | {'IP'}")
+            print("-" * 60)
+
+            # IMPORTANTE: A chave correta é 'interfaces', conforme definido no seu cliente
+            lista_interfaces = dados.get('interfaces', [])
+            for rede in lista_interfaces:
+                nome = rede.get('nome', 'N/A')
+                status = rede.get('status', 'N/A')
+                tipo = rede.get('tipo', 'N/A')
+                # No seu cliente a chave de IP está em maiúsculo "IP"
+                ip_addr = rede.get('IP') if rede.get('IP') else "Sem IP"
+                
+                # Alinhamos as colunas usando < (esquerda) e o número de espaços
+                print(f"{nome[:30]:<25} | {status:<6} | {tipo:<10} | {ip_addr}")
+
+            print("="*60 + "\n")
 
         except Exception as e:
             print(f"Erro ao obter inventário: {e}")

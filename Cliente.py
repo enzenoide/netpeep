@@ -29,10 +29,13 @@ class MonitorarSistema:
         return platform.system()
     def indentificar_tipo(self,nome):
         nome = nome.lower()
-        if "lo" in nome or "loopback" in nome: return "loopback"
-        if "wlan" in nome or "wifi" in nome: return "wifi"
-
-        return "ethernet"
+        if "loopback" in nome or nome == "lo": 
+            return "Loopback"
+        if "wi-fi" in nome or "wlan" in nome or "wifi" in nome: 
+            return "Wifi"
+        if "bluetooth" in nome:
+            return "Bluetooth"
+        return "Ethernet"
     def interfaces(self):
         interfaces_list = []
         interface = psutil.net_if_addrs()

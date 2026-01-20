@@ -132,7 +132,7 @@ class DiscoveryServer:
                             status = "ONLINE"
                         else:
                             status = "OFFLINE"
-                        print(f"IP: {info.ip}:{info.port:<10} | {status:<10} | {status}s")
+                        print(f"IP: {info.ip}:{info.tcp_port:<10} | {status:<10} | {atraso}s")
 
                 case "2":
                     ip = input("Digite o IP: ")

@@ -40,8 +40,6 @@ class DiscoveryServer:
             msg = data.decode()
             ip = addr[0]
 
-            print(f"[Broadcast de {ip}] {msg}")
-
             if msg.startswith("DISCOVER_REQUEST"):
                 tcp_port = int(msg.split("=")[1])
                 key = (ip, tcp_port)
@@ -83,8 +81,8 @@ class DiscoveryServer:
             dados = json.loads(response)
 
             print(f"\n--- DETALHES DO CLIENTE ({ip}) ---")
-            print(f"Sistema Operacional: {dados.get('OS')}")
-            print(f"Núcleos de CPU:      {dados.get('cores')}")
+            print(f"Sistema Operacional: {dados.get('SO')}")
+            print(f"Núcleos de CPU:      {dados.get('cpu')}")
             print(f"Memória RAM Livre:   {dados.get('ram') / (1024**3):.2f} GB")
             print(f"Espaço em Disco:     {dados.get('disco') / (1024**3):.2f} GB")
             print(f"Interfaces de Rede:")
@@ -101,8 +99,8 @@ class DiscoveryServer:
         while True:
             print("\n=== MENU SERVIDOR ===")
             print("1 - Listar clientes")
-            print("2 - Solicitar MAC de um cliente (TCP)")
-            print("3 - Solicitar MAC de todos clientes (TCP)")
+            print("2 - Solicitar Inventario de um cliente(TCP)")
+            print("3 - Solicitar Inventario de todos clientes (TCP)")
             print("0 - Sair")
             op = input("> ")
 

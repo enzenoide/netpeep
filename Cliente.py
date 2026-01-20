@@ -2,9 +2,16 @@ import psutil
 import time
 import platform
 import socket
+import json
+import threading
+import random
+BROADCAST_PORT = 50000
+BROADCAST_ADDR = "<broadcast>" #isso faz com que o socket entenda que deve usar a interface padrão para espalhar a mensagem de forma mais compatível com os protocolos de rede
 class MonitorarSistema:
     def __init__(self,intervalo=2):
         self.set_intervalo(intervalo)
+        self.tcp_port = random.randint(20000,40000)
+        self.running = True
     def get_intervalo(self):
         return self.__intervalo
     def set_intervalo(self,intervalo):
@@ -76,21 +83,28 @@ class MonitorarSistema:
                 print(f"ERRO: {e}")
             finally:
                 conn.close()
+    def send_broadcast(self):
+        """ Grita na rede avisando que o cliente existe """
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        print(f"[UDP] Broadcast iniciado na porta {self.tcp_port}")
+        while self.running:
+            msg = f"DISCOVER_REQUEST;PORT={self.tcp_port}"
+            sock.sendto(msg.encode(), (BROADCAST_ADDR, BROADCAST_PORT))
+            time.sleep(5) # Avisa a cada 5 segundos
     def run(self):
         print(f"Agente iniciado....")
-        while True:
+        threading.Thread(target=self.send_broadcast,daemon=True).start()
+        threading.Thread(target=self.tcp_server,daemon=True).start()
+        
+        try:
+            while self.running:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("Encerrando cliente")
+            self.running = False    
             
-            pacote = {
-                "OS": self.sistema_op(),
-                "cores": self.nucleos(),
-                "ram": self.memoria(),
-                "disco": self.disco(),
-                "redes": self.interfaces()
-            }
-
             
-            self.tcp_server(pacote)
-            
-            time.sleep(self.__intervalo)
+           
 if __name__ == "__main__":
     MonitorarSistema().run()

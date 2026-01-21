@@ -5,8 +5,9 @@ import socket
 import json
 import threading
 import random
+import .main
 BROADCAST_PORT = 50000
-BROADCAST_ADDR = "<broadcast>" #isso faz com que o socket entenda que deve usar a interface padrão para espalhar a mensagem de forma mais compatível com os protocolos de rede
+BROADCAST_ADDR = get_broadcast() #isso faz com que o socket entenda que deve usar a interface padrão para espalhar a mensagem de forma mais compatível com os protocolos de rede
 class MonitorarSistema:
     def __init__(self,intervalo=2):
         self.set_intervalo(intervalo)

@@ -2,9 +2,22 @@ import socket
 import threading
 import time
 import json
+import psutil
+import struct
 BROADCAST_PORT = 50000
-
-
+def get_broadcast_addrs():
+    for iface,addrs in psutil.net_if_addrs().items():
+        for addr in addrs:
+            if addr.family == socket.AF_INET:
+                ip = addr.address
+                mask = addr.netmask
+                if ip.startswith("127."):
+                    continue
+                ip_bin = struct.unpack('!I',socket.inet_aton(ip))[0]
+                mask_bin = struct.unpack('!I',socket.inet_aton(mask))[0]
+                broadcast_bin = (ip_bin | ~mask_bin) & 0xFFFFFFFF
+                return socket.inet_ntoa(struct.pack('!I',broadcast_bin))
+BROADCAST_ADDR = get_broadcast_addrs()
 class ClientInfo:
     def __init__(self, ip, tcp_port):
         self.ip = ip
@@ -27,7 +40,9 @@ class DiscoveryServer:
     def __init__(self):
         self.clients = {}      # chave: (ip, tcp_port)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.bind(("", BROADCAST_PORT))
+        self.sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+        self.sock.bind(('0.0.0.0', BROADCAST_PORT))
+        
 
     # ----------------------------------------------------------------
     # ESCUTA BROADCASTS

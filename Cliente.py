@@ -5,9 +5,9 @@ import socket
 import json
 import threading
 import random
-import .main
 BROADCAST_PORT = 50000
-BROADCAST_ADDR = get_broadcast() #isso faz com que o socket entenda que deve usar a interface padrão para espalhar a mensagem de forma mais compatível com os protocolos de rede
+BROADCAST_ADDR = '10.25.255.255'
+
 class MonitorarSistema:
     def __init__(self,intervalo=2):
         self.set_intervalo(intervalo)
@@ -91,9 +91,11 @@ class MonitorarSistema:
         """ Grita na rede avisando que o cliente existe """
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+        sock.bind(('',0))
         print(f"[UDP] Broadcast iniciado na porta {self.tcp_port}")
         while self.running:
-            msg = f"DISCOVER_REQUEST;PORT={self.tcp_port}"
+            msg = f"DISCOVER_REQUEST={self.tcp_port}"
             sock.sendto(msg.encode(), (BROADCAST_ADDR, BROADCAST_PORT))
             time.sleep(5) # Avisa a cada 5 segundos
     def run(self):

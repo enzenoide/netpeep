@@ -2,6 +2,8 @@ import socket
 import threading
 import time
 import json
+import psutil
+import struct
 BROADCAST_PORT = 50000
 class ClientInfo:
     def __init__(self, ip, tcp_port):

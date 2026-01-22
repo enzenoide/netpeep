@@ -3,8 +3,6 @@ import threading
 import time
 import json
 BROADCAST_PORT = 50000
-
-
 class ClientInfo:
     def __init__(self, ip, tcp_port):
         self.ip = ip
@@ -27,11 +25,13 @@ class DiscoveryServer:
     def __init__(self):
         self.clients = {}      # chave: (ip, tcp_port)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.bind(("", BROADCAST_PORT))
+        self.sock.setsockopt(socket.SOL_SOCKET,socket.SO_BROADCAST,1)
+        self.sock.bind(("0.0.0.0", BROADCAST_PORT))
 
     # ----------------------------------------------------------------
     # ESCUTA BROADCASTS
     # ----------------------------------------------------------------
+    
     def listen_broadcasts(self):
         print(f"[Servidor] Ouvindo broadcasts na porta {BROADCAST_PORT}...")
 

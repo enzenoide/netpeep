@@ -5,8 +5,18 @@ import socket
 import json
 import threading
 import random
+import ipaddress
+def get_broadcast_address():
+    for iface, addrs in psutil.net_if_addrs().items(): #pega a lista de redes de interface e items
+        for addr in addrs:
+            if addr.family == socket.AF_INET and not addr.address.startswith("127."): # se o endereço for ipv4 e não comecar com 127(ipv4 de loopback)
+                ip = addr.address
+                mask = addr.netmask
+                network = ipaddress.IPv4Network(f"{ip}/{mask}", strict=False) #Vai descobrir qual rede o cliente pertence 
+                return str(network.broadcast_address)#vai retornar o broadcast
+        return "<broadcast>"
+BROADCAST_ADDR = get_broadcast_address()
 BROADCAST_PORT = 50000
-BROADCAST_ADDR = "<broadcast>" #isso faz com que o socket entenda que deve usar a interface padrão para espalhar a mensagem de forma mais compatível com os protocolos de rede
 class MonitorarSistema:
     def __init__(self,intervalo=2):
         self.set_intervalo(intervalo)
@@ -93,7 +103,8 @@ class MonitorarSistema:
         print(f"[UDP] Broadcast iniciado na porta {self.tcp_port}")
         while self.running:
             msg = f"DISCOVER_REQUEST;PORT={self.tcp_port}"
-            sock.sendto(msg.encode(), (BROADCAST_ADDR, BROADCAST_PORT))
+            #sock.sendto(msg.encode(), (BROADCAST_ADDR, BROADCAST_PORT))
+            sock.sendto(msg.encode(), ("172.22.48.1", BROADCAST_PORT))
             time.sleep(5) # Avisa a cada 5 segundos
     def run(self):
         print(f"Agente iniciado....")
@@ -106,7 +117,7 @@ class MonitorarSistema:
         except KeyboardInterrupt:
             print("Encerrando cliente")
             self.running = False    
-            
+    
             
            
 if __name__ == "__main__":

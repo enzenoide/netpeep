@@ -103,8 +103,7 @@ class MonitorarSistema:
         print(f"[UDP] Broadcast iniciado na porta {self.tcp_port}")
         while self.running:
             msg = f"DISCOVER_REQUEST;PORT={self.tcp_port}"
-            #sock.sendto(msg.encode(), (BROADCAST_ADDR, BROADCAST_PORT))
-            sock.sendto(msg.encode(), ("172.22.48.1", BROADCAST_PORT))
+            sock.sendto(msg.encode(), (BROADCAST_ADDR, BROADCAST_PORT))
             time.sleep(5) # Avisa a cada 5 segundos
     def run(self):
         print(f"Agente iniciado....")

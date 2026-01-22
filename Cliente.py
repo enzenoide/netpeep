@@ -68,6 +68,7 @@ class MonitorarSistema:
         return interfaces_list
     def tcp_server(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind(("", self.tcp_port))
         sock.listen(5)
 

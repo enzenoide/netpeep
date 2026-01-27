@@ -3,7 +3,7 @@ import threading
 import time
 import json
 import psutil
-import struct
+import os
 BROADCAST_PORT = 50000
 class ClientInfo:
     def __init__(self, ip, tcp_port):
@@ -81,6 +81,8 @@ class DiscoveryServer:
             sock.close()
             
             dados = json.loads(response)
+            self.salvar_inventario(ip,dados)
+            self.salvar_geral(ip,dados)
             disco_valor = dados.get('disco')
             self.clients[key].ultimo_disco = disco_valor
 
@@ -113,12 +115,54 @@ class DiscoveryServer:
 
         except Exception as e:
             print(f"Erro ao obter inventário: {e}")
+    def salvar_inventario(self,ip,dados):
+        os.makedirs("data",exist_ok = True)
+        filename = f"data/{ip}.json"
+        registro = {
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "dados": dados
+        }
+        if os.path.exists(filename):
+            with open(filename,"r",encoding="utf-8") as f:
+                historico = json.load(f)
+        else:
+            historico = []
+        historico.append(registro)
+        with open(filename,"w") as arquivo:
+            json.dump(historico,arquivo,indent=4,ensure_ascii=False)
+    def salvar_geral(self, ip, dados):
+        os.makedirs("data", exist_ok=True)
+        filename = "data/geral.json"
+
+        registro = {
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "dados": dados
+        }
+
+        
+        if os.path.exists(filename):
+            with open(filename, "r", encoding="utf-8") as f:
+                geral = json.load(f)
+        else:
+            geral = {"clientes": {}}
+
+        
+        if ip not in geral["clientes"]:
+            geral["clientes"][ip] = []
+
+        
+        geral["clientes"][ip].append(registro)
+
+        
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(geral, f, indent=4, ensure_ascii=False)
     def calcular_media(self):
         soma = 0
         offline = 0
         online = 0
         contagem_dispositivos = 0
         agora = time.time()
+        
 
         for dados in self.clients.values():
             tempo = agora - dados.last_seen
@@ -144,6 +188,7 @@ class DiscoveryServer:
             print(f"(Baseado em {contagem_dispositivos} clientes com dados)")
         else:
             print("A rede não possui nenhum cliente")
+        
     # ----------------------------------------------------------------
     # MENU COM match-case
     # ----------------------------------------------------------------
@@ -191,3 +236,4 @@ class DiscoveryServer:
 
 if __name__ == "__main__":
     DiscoveryServer().start()
+    

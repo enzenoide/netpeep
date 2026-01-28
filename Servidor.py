@@ -1,3 +1,8 @@
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 import socket
 import threading
 import time
@@ -5,6 +10,11 @@ import json
 import psutil
 import os
 BROADCAST_PORT = 50000
+private_key = rsa.generate_private_key(
+    public_exponent=65537,
+    key_size=2048,
+)
+public_key = private_key.public_key()
 class ClientInfo:
     def __init__(self, ip, tcp_port):
         self.ip = ip
@@ -72,15 +82,36 @@ class DiscoveryServer:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(5)
             sock.connect((ip, port))
+            public_pem = public_key.public_bytes( # transforma a chave publica em bytes
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo
+            )
+            sock.sendall(public_pem) #envia a chave publica
+            encrypted_aes = sock.recv(256) # recebe a chave AES criptografa
+            aes_key = private_key.decrypt( #descriptografa a chave AES
+            encrypted_aes,
+            padding.OAEP(
+                mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                algorithm=hashes.SHA256(),
+                label=None
+                )
+            )
+            aesgcm = AESGCM(aes_key) #cria um objeto capaz de criptografar e descriptografar usando AES-GCM com essa chave
+
+            nonce = os.urandom(12) #gera um novo nonce
+            payload = aesgcm.encrypt(nonce,b"GET_INVENTORY",None) #criptografa a mensagem 
+            sock.sendall(nonce + payload)
 
             
-            sock.send(b"GET_INVENTORY") 
+            payload = sock.recv(16384) #recebe o inventario
+            nonce = payload[:12] #separa a parte do payload que refere ao nonce
+            ciphertext = payload[12:]#separa a parte do payload que refere ao ciphertext
+            aesgcm = AESGCM(aes_key)
+            dados_json = aesgcm.decrypt(nonce,ciphertext,None)
+            sock.close() #descriptografa os dados
+
             
-            
-            response = sock.recv(8192).decode()
-            sock.close()
-            
-            dados = json.loads(response)
+            dados = json.loads(dados_json.decode())
             self.salvar_inventario(ip,dados)
             self.salvar_geral(ip,dados)
             disco_valor = dados.get('disco')

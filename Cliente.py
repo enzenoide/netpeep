@@ -1,3 +1,8 @@
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 import psutil
 import time
 import platform
@@ -6,6 +11,7 @@ import json
 import threading
 import random
 import ipaddress
+import os
 def get_broadcast_address():
     for iface, addrs in psutil.net_if_addrs().items(): #pega a lista de redes de interface e items
         for addr in addrs:
@@ -74,10 +80,28 @@ class MonitorarSistema:
 
         while self.running:
             conn, addr = sock.accept()
-            data = conn.recv(1024).decode()
+            public_pem = conn.recv(4096) #recebe a chave publica por bytes PEM
+            public_key = serialization.load_pem_public_key(public_pem) #converte bytes em objeto criptografico, agora o cliente pode criptografar 
+            aes_key = os.urandom(32) #32 random bytes
+            encrypted_aes = public_key.encrypt( #criptografa a chave AES usando RSA, so so servidor com a chave privada consegue abrir
+                aes_key,
+                padding.OAEP( #define o padding moderno
+            mgf=padding.MGF1(algorithm=hashes.SHA256()), #SHA-256 garante aleatoriedade e proteção contra ataque matematicos
+            algorithm=hashes.SHA256(),
+            label=None
+                )
+            )
+            conn.sendall(encrypted_aes) #Envia a chave AES criptografada para o servidor
+
+            payload = conn.recv(1024) #recebe dados criptografados via AES-GCM
+            nonce = payload[:12] # separa a parte do payload que refere ao nonce
+            ciphertext = payload[12:] # separa a parte do payload que refere a ciphertext + tag
+
+            aesgcm = AESGCM(aes_key) # Cria o objeto AES usando chave compartilhada
+            cmd = aesgcm.decrypt(nonce, ciphertext, None) # Descriptografa e valida se os dados foram alterados,se o nonce/chaves estao erradas,ciphertext e nonce morre aq
 
             try:
-                if data == "GET_INVENTORY":
+                if cmd == b"GET_INVENTORY": #b pq cmd é bytes
                     
                     inventario = {
                         "SO": self.sistema_op(),             
@@ -89,9 +113,14 @@ class MonitorarSistema:
                     
                     
                     import json
-                    response = json.dumps(inventario)
+                    response = json.dumps(inventario) # converte dicionario para json
+                    aesgcm = AESGCM(aes_key) #cria um objeto capaz de criptografar e descriptografar usando AES-GCM com essa chave
+
+                    nonce = os.urandom(12)#novo nonce
+
+                    ciphertext = aesgcm.encrypt(nonce,response.encode(),None) #nova mensagem criptografa
                     
-                    conn.send(response.encode())
+                    conn.sendall(nonce + ciphertext)
                     print(f"[Enviado] Inventário completo enviado para {addr}")
             except Exception as e:
                 print(f"ERRO: {e}")

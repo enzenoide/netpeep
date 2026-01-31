@@ -1,7 +1,7 @@
 **/keys/private.pem
 **/keys/public.pem
 
-authorized_clients
+Server/keys/authorized_clients
 Client/hash.txt
 Client/server_fingerprint.txt
 

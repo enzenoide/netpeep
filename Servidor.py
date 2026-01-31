@@ -3,6 +3,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from Key import KeyManager
 import socket
 import threading
 import time
@@ -10,11 +11,10 @@ import json
 import psutil
 import os
 BROADCAST_PORT = 50000
-private_key = rsa.generate_private_key(
-    public_exponent=65537,
-    key_size=2048,
-)
-public_key = private_key.public_key()
+BASE_DIR = os.path.join(os.path.dirname(__file__), "Server")
+keys = KeyManager(BASE_DIR)
+private_key = keys.private_key
+public_key = keys.public_key
 class ClientInfo:
     def __init__(self, ip, tcp_port):
         self.ip = ip
@@ -67,9 +67,37 @@ class DiscoveryServer:
                 # envia resposta UDP
                 self.sock.sendto("DISCOVER_RESPONSE".encode(), addr)
 
-    # ----------------------------------------------------------------
-    # SOLICITA MAC via TCP
-    # ----------------------------------------------------------------
+    def verifica_cliente(self,public_pem):
+
+        digest = hashes.Hash(hashes.SHA256())#Gera o SHA-256 da chave pública (fingerprint)
+        digest.update(public_pem)
+        fingerprint = digest.finalize().hex()
+
+       
+        auth_file = os.path.join("Server", "authorized_clients.txt")#Caminho do arquivo de clientes autorizados
+
+        
+        if not os.path.exists(auth_file): #Se o arquivo não existir, ninguém é autorizado
+            return False
+
+        
+        with open(auth_file, "r") as f: #Lê todos os fingerprints autorizados
+            autorizados = [
+                linha.strip()
+                for linha in f.readlines()
+                if linha.strip()
+            ]
+        return fingerprint in autorizados
+    def recv_exact(self,sock,size):
+        data = b""
+        while len(data) < size:
+            chunk = sock.recv(size - len(data))
+            if not chunk:
+                raise ConnectionError("Conexão encerrada antes de receber dados completos")
+            data += chunk
+        return data
+
+    
     def solicitar_inventario(self, key):
         if key not in self.clients:
             print("Cliente não encontrado!")
@@ -79,14 +107,25 @@ class DiscoveryServer:
         print(f"\n[Servidor] Solicitando inventário completo de {ip}:{port}...")
 
         try:
+            
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+           
             sock.settimeout(5)
+           
             sock.connect((ip, port))
+            client_public_pem = sock.recv(4096)
+
+            if not self.verifica_cliente(client_public_pem):
+                print("Cliente NÃO autorizado")
+                sock.close()
+                return
+            
             public_pem = public_key.public_bytes( # transforma a chave publica em bytes
                 encoding=serialization.Encoding.PEM,
                 format=serialization.PublicFormat.SubjectPublicKeyInfo
             )
             sock.sendall(public_pem) #envia a chave publica
+            
             encrypted_aes = sock.recv(256) # recebe a chave AES criptografa
             aes_key = private_key.decrypt( #descriptografa a chave AES
             encrypted_aes,
@@ -96,10 +135,13 @@ class DiscoveryServer:
                 label=None
                 )
             )
+            
             aesgcm = AESGCM(aes_key) #cria um objeto capaz de criptografar e descriptografar usando AES-GCM com essa chave
-
+            
             nonce = os.urandom(12) #gera um novo nonce
+            
             payload = aesgcm.encrypt(nonce,b"GET_INVENTORY",None) #criptografa a mensagem 
+            
             sock.sendall(nonce + payload)
 
             

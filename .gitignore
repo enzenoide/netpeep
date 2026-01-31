@@ -1,0 +1,11 @@
+**/keys/private.pem
+**/keys/public.pem
+
+authorized_clients
+Client/hash.txt
+Client/server_fingerprint.txt
+
+data/
+
+__pycache__/
+*.pyc

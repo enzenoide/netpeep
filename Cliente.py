@@ -3,6 +3,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from Key import KeyManager
 import psutil
 import time
 import platform
@@ -23,6 +24,10 @@ def get_broadcast_address():
         return "<broadcast>"
 BROADCAST_ADDR = get_broadcast_address()
 BROADCAST_PORT = 50000
+BASE_DIR = os.path.join(os.path.dirname(__file__), "Client")
+keys = KeyManager(BASE_DIR)
+private_key = keys.private_key
+public_key = keys.public_key
 class MonitorarSistema:
     def __init__(self,intervalo=2):
         self.set_intervalo(intervalo)
@@ -72,18 +77,50 @@ class MonitorarSistema:
                     data["MAC"] = addr.address
             interfaces_list.append(data)
         return interfaces_list
-    def tcp_server(self):
+    
+
+    def verificar_servidor(self,public_pem_recebido,
+                caminho_fingerprint = os.path.join(BASE_DIR, "server_fingerprint.txt")
+):
+        digest = hashes.Hash(hashes.SHA256())#Gera o SHA-256 da chave pública recebida
+        digest.update(public_pem_recebido)
+        fingerprint_recebido = digest.finalize().hex()
+
+        
+        with open(caminho_fingerprint, "r") as f:#Lê o fingerprint confiável salvo no cliente
+            fingerprint_confiavel = f.read().strip()
+        
+        if fingerprint_recebido != fingerprint_confiavel:#Compara
+            print("Servidor NÃO autenticado (fingerprint diferente)")
+            return False
+        print("Servidor autenticado com sucesso")
+        return True
+
+    def tcp(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind(("", self.tcp_port))
         sock.listen(5)
+    
 
         while self.running:
             conn, addr = sock.accept()
-            public_pem = conn.recv(4096) #recebe a chave publica por bytes PEM
-            public_key = serialization.load_pem_public_key(public_pem) #converte bytes em objeto criptografico, agora o cliente pode criptografar 
+            client_public_pem = public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+            )
+            conn.sendall(client_public_pem)
+            #O PROBLEMA SÃO ESSAS LINHAS ABAIXO, ESTÁ RECEBENDO A RESPOSTA DO AUTHORIZED E TRATANDO COMO SE FOSSE A CHAVE PUBLICA
+
+            server_public_pem = conn.recv(4096) #recebe a chave publica por bytes PEM
+            if not self.verificar_servidor(server_public_pem):
+                conn.close()
+            public_key_server = serialization.load_pem_public_key(server_public_pem) #converte bytes em objeto criptografico, agora o cliente pode criptografar
+
+            
+            
             aes_key = os.urandom(32) #32 random bytes
-            encrypted_aes = public_key.encrypt( #criptografa a chave AES usando RSA, so so servidor com a chave privada consegue abrir
+            encrypted_aes = public_key_server.encrypt( #criptografa a chave AES usando RSA, so o servidor com a chave privada consegue abrir
                 aes_key,
                 padding.OAEP( #define o padding moderno
             mgf=padding.MGF1(algorithm=hashes.SHA256()), #SHA-256 garante aleatoriedade e proteção contra ataque matematicos
@@ -140,7 +177,7 @@ class MonitorarSistema:
     def run(self):
         print(f"Agente iniciado....")
         threading.Thread(target=self.send_broadcast,daemon=True).start()
-        threading.Thread(target=self.tcp_server,daemon=True).start()
+        threading.Thread(target=self.tcp,daemon=True).start()
         
         try:
             while self.running:

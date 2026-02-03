@@ -13,6 +13,10 @@ import threading
 import random
 import ipaddress
 import os
+from pynput.mouse import Controller as MouseController, Button
+from pynput.keyboard import Controller as KeyboardController
+mouse = MouseController()
+keyboard = KeyboardController()
 def get_broadcast_address():
     for iface, addrs in psutil.net_if_addrs().items(): #pega a lista de redes de interface e items
         for addr in addrs:
@@ -77,8 +81,22 @@ class MonitorarSistema:
                     data["MAC"] = addr.address
             interfaces_list.append(data)
         return interfaces_list
-    
+    def send_msg(self,conn, aesgcm, msg):
+        payload = json.dumps(msg).encode()
+        nonce = os.urandom(12)
+        ciphertext = aesgcm.encrypt(nonce, payload, None)
+        conn.sendall(nonce + ciphertext)
 
+
+    def recv_msg(self,conn, aesgcm):
+        payload = conn.recv(65536)
+        if not payload:
+            raise ConnectionError("Conexão encerrada")
+
+        nonce = payload[:12]
+        ciphertext = payload[12:]
+        plaintext = aesgcm.decrypt(nonce, ciphertext, None)
+        return json.loads(plaintext.decode())
     def verificar_servidor(self,public_pem_recebido,
                 caminho_fingerprint = os.path.join(BASE_DIR, "server_fingerprint.txt")
 ):
@@ -95,74 +113,118 @@ class MonitorarSistema:
             return False
         print("Servidor autenticado com sucesso")
         return True
+    def executar_controle(self, msg):
+        device = msg.get("device")
+        action = msg.get("action")
 
+        # -------------------
+        # TECLADO
+        # -------------------
+        if device == "keyboard":
+            key = msg.get("key")
+
+            try:
+                if key.startswith("Key."):
+                    k = getattr(keyboard.Key, key.replace("Key.", ""))
+                else:
+                    k = key
+            except:
+                return
+
+            if action == "press":
+                keyboard.press(k)
+            elif action == "release":
+                keyboard.release(k)
+
+        # -------------------
+        # MOUSE
+        # -------------------
+        elif device == "mouse":
+            if action == "move":
+                mouse.position = (msg["x"], msg["y"])
+
+            elif action == "click":
+                btn = Button.left if msg["button"] == "left" else Button.right
+                if msg["pressed"]:
+                    mouse.press(btn)
+                else:
+                    mouse.release(btn)
     def tcp(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind(("", self.tcp_port))
         sock.listen(5)
-    
 
         while self.running:
             conn, addr = sock.accept()
-            client_public_pem = public_key.public_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PublicFormat.SubjectPublicKeyInfo
-            )
-            conn.sendall(client_public_pem)
-            #O PROBLEMA SÃO ESSAS LINHAS ABAIXO, ESTÁ RECEBENDO A RESPOSTA DO AUTHORIZED E TRATANDO COMO SE FOSSE A CHAVE PUBLICA
-
-            server_public_pem = conn.recv(4096) #recebe a chave publica por bytes PEM
-            if not self.verificar_servidor(server_public_pem):
-                conn.close()
-            public_key_server = serialization.load_pem_public_key(server_public_pem) #converte bytes em objeto criptografico, agora o cliente pode criptografar
-
-            
-            
-            aes_key = os.urandom(32) #32 random bytes
-            encrypted_aes = public_key_server.encrypt( #criptografa a chave AES usando RSA, so o servidor com a chave privada consegue abrir
-                aes_key,
-                padding.OAEP( #define o padding moderno
-            mgf=padding.MGF1(algorithm=hashes.SHA256()), #SHA-256 garante aleatoriedade e proteção contra ataque matematicos
-            algorithm=hashes.SHA256(),
-            label=None
-                )
-            )
-            conn.sendall(encrypted_aes) #Envia a chave AES criptografada para o servidor
-
-            payload = conn.recv(1024) #recebe dados criptografados via AES-GCM
-            nonce = payload[:12] # separa a parte do payload que refere ao nonce
-            ciphertext = payload[12:] # separa a parte do payload que refere a ciphertext + tag
-
-            aesgcm = AESGCM(aes_key) # Cria o objeto AES usando chave compartilhada
-            cmd = aesgcm.decrypt(nonce, ciphertext, None) # Descriptografa e valida se os dados foram alterados,se o nonce/chaves estao erradas,ciphertext e nonce morre aq
+            print(f"[TCP] Conexão de {addr}")
 
             try:
-                if cmd == b"GET_INVENTORY": #b pq cmd é bytes
-                    
-                    inventario = {
-                        "SO": self.sistema_op(),             
-                        "cpu": self.nucleos(),       
-                        "ram": self.memoria(),
-                        "disco": self.disco(), 
-                        "interfaces": self.interfaces()
-                    }
-                    
-                    
-                    import json
-                    response = json.dumps(inventario) # converte dicionario para json
-                    aesgcm = AESGCM(aes_key) #cria um objeto capaz de criptografar e descriptografar usando AES-GCM com essa chave
+                # 1️⃣ envia chave pública do cliente
+                client_public_pem = public_key.public_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PublicFormat.SubjectPublicKeyInfo
+                )
+                conn.sendall(client_public_pem)
 
-                    nonce = os.urandom(12)#novo nonce
+                # 2️⃣ recebe chave pública do servidor
+                server_public_pem = conn.recv(4096)
 
-                    ciphertext = aesgcm.encrypt(nonce,response.encode(),None) #nova mensagem criptografa
-                    
-                    conn.sendall(nonce + ciphertext)
-                    print(f"[Enviado] Inventário completo enviado para {addr}")
-            except Exception as e:
-                print(f"ERRO: {e}")
-            finally:
-                conn.close()
+                if not self.verificar_servidor(server_public_pem):
+                    conn.close()
+                    continue
+
+                public_key_server = serialization.load_pem_public_key(server_public_pem)
+
+                # 3️⃣ gera AES e envia criptografada
+                aes_key = os.urandom(32)
+                encrypted_aes = public_key_server.encrypt(
+                    aes_key,
+                    padding.OAEP(
+                        mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                        algorithm=hashes.SHA256(),
+                        label=None
+                    )
+                )
+                conn.sendall(encrypted_aes)
+
+                aesgcm = AESGCM(aes_key)
+
+                controle_ativo = False
+
+                while True:
+                    msg = self.recv_msg(conn, aesgcm)
+                    tipo = msg.get("type")
+
+                    if tipo == "GET_INVENTORY":
+                        inventario = {
+                            "SO": self.sistema_op(),
+                            "cpu": self.nucleos(),
+                            "ram": self.memoria(),
+                            "disco": self.disco(),
+                            "interfaces": self.interfaces()
+                        }
+                        self.send_msg(conn, aesgcm, {
+                            "type": "INVENTORY_RESPONSE",
+                            "data": inventario
+                        })
+
+                    elif tipo == "CONTROL_START":
+                        controle_ativo = True
+                        print("[CLIENTE] 🔒 Controle remoto ATIVADO")
+
+                    elif tipo == "CONTROL_EVENT":
+                        if controle_ativo:
+                            self.executar_controle(msg)
+
+                    elif tipo == "CONTROL_STOP":
+                        controle_ativo = False
+                        print("[CLIENTE] 🔓 Controle remoto ENCERRADO")
+
+                    else:
+                        print(f"[CLIENTE] Tipo desconhecido: {tipo}")
+            except ConnectionError:
+                print("[CLIENTE] Conexão perdida, encerrando controle")
     def send_broadcast(self):
         """ Grita na rede avisando que o cliente existe """
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

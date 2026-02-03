@@ -1,7 +1,7 @@
 import os
 from cryptography.hazmat.primitives import hashes
 class FingerPrintServer:
-    def gerar_fingerprint_e_salvar_config(caminho_public_key="Server/keys/public.pem",pasta_cliente="Client",arquivo_config="server_fingerprint.txt"):
+    def gerar_fingerprint_e_salvar_config(caminho_public_key="Server/keys/public.pem",pasta_cliente="Server",arquivo_config="server_fingerprint.txt"):
         # 1. Lê a chave pública do servidor em bytes
         with open(caminho_public_key, "rb") as f:
             public_pem = f.read()

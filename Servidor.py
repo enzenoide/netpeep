@@ -4,6 +4,7 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from Key import KeyManager
+from pynput import keyboard, mouse
 import socket
 import threading
 import time
@@ -88,16 +89,101 @@ class DiscoveryServer:
                 if linha.strip()
             ]
         return fingerprint in autorizados
-    def recv_exact(self,sock,size):
-        data = b""
-        while len(data) < size:
-            chunk = sock.recv(size - len(data))
-            if not chunk:
-                raise ConnectionError("Conexão encerrada antes de receber dados completos")
-            data += chunk
-        return data
+    def iniciar_controle_remoto(self, sock, aesgcm):
+        print("[SERVIDOR] Iniciando controle remoto")
 
+        self.send_msg(sock, aesgcm, {
+            "type": "CONTROL_START"
+        })
+
+        kbd = self.iniciar_teclado(sock, aesgcm)
+        mouse_listener = self.iniciar_mouse(sock, aesgcm)
+
+        input("Pressione ENTER para ENCERRAR o controle remoto")
+
+        kbd.stop()
+        mouse_listener.stop()
+
+        self.send_msg(sock, aesgcm, {
+            "type": "CONTROL_STOP"
+        })
+
+        print("[SERVIDOR] Controle remoto encerrado")
+    def send_msg(self,sock, aesgcm, msg: dict):
+        payload = json.dumps(msg).encode()
+        nonce = os.urandom(12)
+        encrypted = aesgcm.encrypt(nonce, payload, None)
+        sock.sendall(nonce + encrypted)
+
+
+    def recv_msg(self,sock, aesgcm):
+        payload = sock.recv(65536)
+        if not payload:
+            raise ConnectionError("Conexão encerrada")
+
+        nonce = payload[:12]
+        ciphertext = payload[12:]
+        decrypted = aesgcm.decrypt(nonce, ciphertext, None)
+        return json.loads(decrypted.decode())
+
+    def enviar_evento(self, sock, aesgcm, evento):
+        self.send_msg(sock, aesgcm, evento)
+    def iniciar_teclado(self, sock, aesgcm):
+        def on_press(key):
+            try:
+                k = key.char
+            except AttributeError:
+                k = str(key)
+
+            self.enviar_evento(sock, aesgcm, {
+                "type": "CONTROL_EVENT",
+                "device": "keyboard",
+                "action": "press",
+                "key": k
+            })
+
+        def on_release(key):
+            self.enviar_evento(sock, aesgcm, {
+                "type": "CONTROL_EVENT",
+                "device": "keyboard",
+                "action": "release",
+                "key": str(key)
+            })
+
+        listener = keyboard.Listener(on_press=on_press, on_release=on_release)
+        listener.start()
+        return listener
     
+    def iniciar_mouse(self, sock, aesgcm):
+        last_send = 0
+
+        def on_move(x, y):
+            nonlocal last_send
+            now = time.time()
+            if now - last_send < 0.03:  # ~30 FPS
+                return
+            last_send = now
+
+            self.enviar_evento(sock, aesgcm, {
+                "type": "CONTROL_EVENT",
+                "device": "mouse",
+                "action": "move",
+                "x": x,
+                "y": y
+            })
+
+        def on_click(x, y, button, pressed):
+            self.enviar_evento(sock, aesgcm, {
+                "type": "CONTROL_EVENT",
+                "device": "mouse",
+                "action": "click",
+                "button": "left" if button == mouse.Button.left else "right",
+                "pressed": pressed
+            })
+
+        listener = mouse.Listener(on_move=on_move, on_click=on_click)
+        listener.start()
+        return listener
     def solicitar_inventario(self, key):
         if key not in self.clients:
             print("Cliente não encontrado!")
@@ -110,7 +196,7 @@ class DiscoveryServer:
             
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
            
-            sock.settimeout(5)
+            sock.settimeout(10)
            
             sock.connect((ip, port))
             client_public_pem = sock.recv(4096)
@@ -138,22 +224,19 @@ class DiscoveryServer:
             
             aesgcm = AESGCM(aes_key) #cria um objeto capaz de criptografar e descriptografar usando AES-GCM com essa chave
             
-            nonce = os.urandom(12) #gera um novo nonce
             
-            payload = aesgcm.encrypt(nonce,b"GET_INVENTORY",None) #criptografa a mensagem 
-            
-            sock.sendall(nonce + payload)
+            self.send_msg(sock, aesgcm, { "type": "GET_INVENTORY"})
 
             
-            payload = sock.recv(16384) #recebe o inventario
-            nonce = payload[:12] #separa a parte do payload que refere ao nonce
-            ciphertext = payload[12:]#separa a parte do payload que refere ao ciphertext
-            aesgcm = AESGCM(aes_key)
-            dados_json = aesgcm.decrypt(nonce,ciphertext,None)
+            msg = self.recv_msg(sock, aesgcm)
+
+            if msg["type"] != "INVENTORY_RESPONSE":
+                raise ValueError("Resposta inesperada do cliente")
+
+            dados = msg["data"]
             sock.close() #descriptografa os dados
 
             
-            dados = json.loads(dados_json.decode())
             self.salvar_inventario(ip,dados)
             self.salvar_geral(ip,dados)
             disco_valor = dados.get('disco')
@@ -188,6 +271,70 @@ class DiscoveryServer:
 
         except Exception as e:
             print(f"Erro ao obter inventário: {e}")
+    def controle_remoto(self, key):
+        if key not in self.clients:
+            print("Cliente não encontrado")
+            return
+
+        ip, port = key
+        print(f"[SERVIDOR] Iniciando controle remoto em {ip}:{port}")
+
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(10)
+            sock.connect((ip, port))
+
+            # -------- HANDSHAKE --------
+            client_public_pem = sock.recv(4096)
+
+            if not self.verifica_cliente(client_public_pem):
+                print("Cliente NÃO autorizado")
+                sock.close()
+                return
+
+            server_public_pem = public_key.public_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo
+            )
+            sock.sendall(server_public_pem)
+
+            encrypted_aes = sock.recv(256)
+            aes_key = private_key.decrypt(
+                encrypted_aes,
+                padding.OAEP(
+                    mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                    algorithm=hashes.SHA256(),
+                    label=None
+                )
+            )
+
+            aesgcm = AESGCM(aes_key)
+
+            # -------- START CONTROLE --------
+            self.send_msg(sock, aesgcm, {
+                "type": "CONTROL_START"
+            })
+
+            print("🎮 Controle remoto ATIVO")
+            print("➡️  Pressione ENTER para encerrar")
+
+            teclado = self.iniciar_teclado(sock, aesgcm)
+            mouse = self.iniciar_mouse(sock, aesgcm)
+
+            input()
+
+            teclado.stop()
+            mouse.stop()
+
+            self.send_msg(sock, aesgcm, {
+                "type": "CONTROL_STOP"
+            })
+
+            sock.close()
+            print("🔓 Controle remoto encerrado")
+
+        except Exception as e:
+            print(f"[ERRO] {e}")
     def salvar_inventario(self,ip,dados):
         os.makedirs("data",exist_ok = True)
         filename = f"data/{ip}.json"
@@ -271,6 +418,8 @@ class DiscoveryServer:
             print("1 - Listar clientes")
             print("2 - Solicitar Inventario de um cliente(TCP)")
             print("3 - Solicitar Inventario de todos clientes (TCP)")
+            print("4 - Média simples")
+            print("5 - Iniciar Controle remoto")
             print("0 - Sair")
             op = input("> ")
 
@@ -295,7 +444,11 @@ class DiscoveryServer:
                     for key in self.clients:
                         self.solicitar_inventario(key)
                 case "4":
-                        self.calcular_media()
+                    self.calcular_media()
+                case "5":
+                    ip = input("IP do cliente: ")
+                    port = int(input("Porta TCP: "))
+                    self.controle_remoto((ip, port))
                 case "0":
                     exit()
 

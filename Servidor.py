@@ -11,6 +11,7 @@ import time
 import json
 import psutil
 import os
+from queue import Queue
 BROADCAST_PORT = 50000
 BASE_DIR = os.path.join(os.path.dirname(__file__), "Server")
 keys = KeyManager(BASE_DIR)
@@ -40,6 +41,10 @@ class DiscoveryServer:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET,socket.SO_BROADCAST,1)
         self.sock.bind(("0.0.0.0", BROADCAST_PORT))
+
+        self.event_queue = Queue()
+        self.controle_ativo = False
+        self.sender_thread = None
 
     # ----------------------------------------------------------------
     # ESCUTA BROADCASTS
@@ -90,24 +95,31 @@ class DiscoveryServer:
             ]
         return fingerprint in autorizados
     def iniciar_controle_remoto(self, sock, aesgcm):
-        print("[SERVIDOR] Iniciando controle remoto")
+        print("[SERVIDOR] Controle remoto iniciado")
+        self.controle_ativo = True
 
-        self.send_msg(sock, aesgcm, {
-            "type": "CONTROL_START"
-        })
+        self.send_msg(sock, aesgcm, {"type": "CONTROL_START"})
 
-        kbd = self.iniciar_teclado(sock, aesgcm)
-        mouse_listener = self.iniciar_mouse(sock, aesgcm)
+        self.sender_thread = threading.Thread(
+            target=self.sender_loop,
+            args=(sock, aesgcm),
+            daemon=True
+        )
+        self.sender_thread.start()
 
-        input("Pressione ENTER para ENCERRAR o controle remoto")
+        teclado = self.iniciar_teclado()
+        mouse = self.iniciar_mouse()
 
-        kbd.stop()
-        mouse_listener.stop()
+        input("Pressione ENTER para ENCERRAR o controle remoto\n")
 
-        self.send_msg(sock, aesgcm, {
-            "type": "CONTROL_STOP"
-        })
+        self.controle_ativo = False
+        self.event_queue.put(None)
 
+        teclado.stop()
+        mouse.stop()
+
+        self.send_msg(sock, aesgcm, {"type": "CONTROL_STOP"})
+        sock.close()
         print("[SERVIDOR] Controle remoto encerrado")
     def send_msg(self,sock, aesgcm, msg: dict):
         payload = json.dumps(msg).encode()
@@ -125,17 +137,28 @@ class DiscoveryServer:
         ciphertext = payload[12:]
         decrypted = aesgcm.decrypt(nonce, ciphertext, None)
         return json.loads(decrypted.decode())
-
+    def sender_loop(self, sock, aesgcm):
+        try:
+            while self.controle_ativo:
+                evento = self.event_queue.get()
+                if evento is None:
+                    break
+                self.send_msg(sock, aesgcm, evento)
+        except Exception as e:
+            print("[SERVIDOR] Erro no envio:", e)
+            self.controle_ativo = False
     def enviar_evento(self, sock, aesgcm, evento):
         self.send_msg(sock, aesgcm, evento)
-    def iniciar_teclado(self, sock, aesgcm):
+    def iniciar_teclado(self):
         def on_press(key):
+            if not self.controle_ativo:
+                return
             try:
                 k = key.char
             except AttributeError:
                 k = str(key)
 
-            self.enviar_evento(sock, aesgcm, {
+            self.event_queue.put( {
                 "type": "CONTROL_EVENT",
                 "device": "keyboard",
                 "action": "press",
@@ -143,7 +166,7 @@ class DiscoveryServer:
             })
 
         def on_release(key):
-            self.enviar_evento(sock, aesgcm, {
+            self.event_queue.put({
                 "type": "CONTROL_EVENT",
                 "device": "keyboard",
                 "action": "release",
@@ -154,17 +177,19 @@ class DiscoveryServer:
         listener.start()
         return listener
     
-    def iniciar_mouse(self, sock, aesgcm):
-        last_send = 0
+    def iniciar_mouse(self):
+        last_move = time.time()
 
         def on_move(x, y):
-            nonlocal last_send
-            now = time.time()
-            if now - last_send < 0.03:  # ~30 FPS
+            nonlocal last_move
+            if not self.controle_ativo:
                 return
-            last_send = now
+            if time.time() - last_move < 0.02:
+                return
+            
+            last_move = time.time()
 
-            self.enviar_evento(sock, aesgcm, {
+            self.event_queue.put({
                 "type": "CONTROL_EVENT",
                 "device": "mouse",
                 "action": "move",
@@ -173,7 +198,9 @@ class DiscoveryServer:
             })
 
         def on_click(x, y, button, pressed):
-            self.enviar_evento(sock, aesgcm, {
+            if not self.controle_ativo:
+                return
+            self.event_queue.put({
                 "type": "CONTROL_EVENT",
                 "device": "mouse",
                 "action": "click",
@@ -271,70 +298,6 @@ class DiscoveryServer:
 
         except Exception as e:
             print(f"Erro ao obter inventário: {e}")
-    def controle_remoto(self, key):
-        if key not in self.clients:
-            print("Cliente não encontrado")
-            return
-
-        ip, port = key
-        print(f"[SERVIDOR] Iniciando controle remoto em {ip}:{port}")
-
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(10)
-            sock.connect((ip, port))
-
-            # -------- HANDSHAKE --------
-            client_public_pem = sock.recv(4096)
-
-            if not self.verifica_cliente(client_public_pem):
-                print("Cliente NÃO autorizado")
-                sock.close()
-                return
-
-            server_public_pem = public_key.public_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PublicFormat.SubjectPublicKeyInfo
-            )
-            sock.sendall(server_public_pem)
-
-            encrypted_aes = sock.recv(256)
-            aes_key = private_key.decrypt(
-                encrypted_aes,
-                padding.OAEP(
-                    mgf=padding.MGF1(algorithm=hashes.SHA256()),
-                    algorithm=hashes.SHA256(),
-                    label=None
-                )
-            )
-
-            aesgcm = AESGCM(aes_key)
-
-            # -------- START CONTROLE --------
-            self.send_msg(sock, aesgcm, {
-                "type": "CONTROL_START"
-            })
-
-            print("🎮 Controle remoto ATIVO")
-            print("➡️  Pressione ENTER para encerrar")
-
-            teclado = self.iniciar_teclado(sock, aesgcm)
-            mouse = self.iniciar_mouse(sock, aesgcm)
-
-            input()
-
-            teclado.stop()
-            mouse.stop()
-
-            self.send_msg(sock, aesgcm, {
-                "type": "CONTROL_STOP"
-            })
-
-            sock.close()
-            print("🔓 Controle remoto encerrado")
-
-        except Exception as e:
-            print(f"[ERRO] {e}")
     def salvar_inventario(self,ip,dados):
         os.makedirs("data",exist_ok = True)
         filename = f"data/{ip}.json"
@@ -448,7 +411,33 @@ class DiscoveryServer:
                 case "5":
                     ip = input("IP do cliente: ")
                     port = int(input("Porta TCP: "))
-                    self.controle_remoto((ip, port))
+
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.connect((ip, port))
+
+                    client_public_pem = sock.recv(4096)
+                    if not self.verifica_cliente(client_public_pem):
+                        print("Cliente não autorizado")
+                        sock.close()
+                        break
+
+                    sock.sendall(public_key.public_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PublicFormat.SubjectPublicKeyInfo
+                    ))
+
+                    encrypted_aes = sock.recv(256)
+                    aes_key = private_key.decrypt(
+                    encrypted_aes,
+                    padding.OAEP(
+                    mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                    algorithm=hashes.SHA256(),
+                    label=None
+                    )
+                )
+
+                    aesgcm = AESGCM(aes_key)
+                    self.iniciar_controle_remoto(sock, aesgcm)
                 case "0":
                     exit()
 

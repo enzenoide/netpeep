@@ -13,6 +13,7 @@ import threading
 import random
 import ipaddress
 import os
+import struct
 from pynput.mouse import Controller as MouseController, Button
 from pynput.keyboard import Controller as KeyboardController
 mouse = MouseController()
@@ -81,20 +82,25 @@ class MonitorarSistema:
                     data["MAC"] = addr.address
             interfaces_list.append(data)
         return interfaces_list
-    def send_msg(self,conn, aesgcm, msg):
+    def send_msg(self, sock, aesgcm, msg):
         payload = json.dumps(msg).encode()
         nonce = os.urandom(12)
-        ciphertext = aesgcm.encrypt(nonce, payload, None)
-        conn.sendall(nonce + ciphertext)
+        encrypted = aesgcm.encrypt(nonce, payload, None)
 
+        body = nonce + encrypted
+        header = struct.pack("!I", len(body))  # 4 bytes tamanho
 
-    def recv_msg(self,conn, aesgcm):
-        payload = conn.recv(65536)
-        if not payload:
-            raise ConnectionError("Conexão encerrada")
+        sock.sendall(header + body)
 
-        nonce = payload[:12]
-        ciphertext = payload[12:]
+    def recv_msg(self, sock, aesgcm):
+        header = self.recvall(sock, 4)
+        msg_len = struct.unpack("!I", header)[0]
+
+        body = self.recvall(sock, msg_len)
+
+        nonce = body[:12]
+        ciphertext = body[12:]
+
         plaintext = aesgcm.decrypt(nonce, ciphertext, None)
         return json.loads(plaintext.decode())
     def verificar_servidor(self,public_pem_recebido,
@@ -117,38 +123,48 @@ class MonitorarSistema:
         device = msg.get("device")
         action = msg.get("action")
 
-        # -------------------
-        # TECLADO
-        # -------------------
         if device == "keyboard":
-            key = msg.get("key")
+            key_type = msg.get("key_type")
+            key_val = msg.get("key")
 
             try:
-                if key.startswith("Key."):
-                    k = getattr(keyboard.Key, key.replace("Key.", ""))
+                if key_type == "special":
+                    k = getattr(keyboard.Key, key_val)
                 else:
-                    k = key
-            except:
+                    k = key_val
+            except Exception as e:
+                print("Erro ao resolver tecla:", e)
                 return
 
             if action == "press":
                 keyboard.press(k)
             elif action == "release":
                 keyboard.release(k)
-
-        # -------------------
-        # MOUSE
-        # -------------------
         elif device == "mouse":
+            action = msg.get("action")
+
             if action == "move":
-                mouse.position = (msg["x"], msg["y"])
+                dx = msg.get("dx", 0)
+                dy = msg.get("dy", 0)
+                mouse.move(dx, dy)
 
             elif action == "click":
-                btn = Button.left if msg["button"] == "left" else Button.right
-                if msg["pressed"]:
-                    mouse.press(btn)
+                btn = msg.get("button")
+                pressed = msg.get("pressed")
+
+                button = Button.left if btn == "left" else Button.right
+                if pressed:
+                    mouse.press(button)
                 else:
-                    mouse.release(btn)
+                    mouse.release(button)
+    def recvall(self,sock, n):
+        data = b''
+        while len(data) < n:
+            packet = sock.recv(n - len(data))
+            if not packet:
+                raise ConnectionError("Conexão encerrada")
+            data += packet
+        return data
     def tcp(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -168,7 +184,9 @@ class MonitorarSistema:
                 conn.sendall(client_public_pem)
 
                 # 2️⃣ recebe chave pública do servidor
-                server_public_pem = conn.recv(4096)
+                header = self.recvall(conn, 4)
+                pem_len = struct.unpack("!I", header)[0]
+                server_public_pem = self.recvall(conn, pem_len)
 
                 if not self.verificar_servidor(server_public_pem):
                     conn.close()

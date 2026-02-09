@@ -10,8 +10,9 @@ import threading
 import time
 import json
 import psutil
+import struct
 import os
-from queue import Queue
+from queue import Queue,Empty
 BROADCAST_PORT = 50000
 BASE_DIR = os.path.join(os.path.dirname(__file__), "Server")
 keys = KeyManager(BASE_DIR)
@@ -108,7 +109,7 @@ class DiscoveryServer:
         self.sender_thread.start()
 
         teclado = self.iniciar_teclado()
-        mouse = self.iniciar_mouse()
+        mouse_listener = self.iniciar_mouse()
 
         input("Pressione ENTER para ENCERRAR o controle remoto\n")
 
@@ -116,90 +117,156 @@ class DiscoveryServer:
         self.event_queue.put(None)
 
         teclado.stop()
-        mouse.stop()
+        mouse_listener.stop()
 
-        self.send_msg(sock, aesgcm, {"type": "CONTROL_STOP"})
+        time.sleep(0.2)  # dá tempo do sender_loop sair
+
+        try:
+            self.send_msg(sock, aesgcm, {"type": "CONTROL_STOP"})
+        except:
+            pass
+
         sock.close()
         print("[SERVIDOR] Controle remoto encerrado")
-    def send_msg(self,sock, aesgcm, msg: dict):
+    def recvall(self,sock, n):
+        data = b''
+        while len(data) < n:
+            packet = sock.recv(n - len(data))
+            if not packet:
+                raise ConnectionError("Conexão encerrada")
+            data += packet
+        return data
+    def send_msg(self, sock, aesgcm, msg):
         payload = json.dumps(msg).encode()
         nonce = os.urandom(12)
         encrypted = aesgcm.encrypt(nonce, payload, None)
-        sock.sendall(nonce + encrypted)
+
+        body = nonce + encrypted
+        header = struct.pack("!I", len(body))  # 4 bytes tamanho
+
+        sock.sendall(header + body)
 
 
-    def recv_msg(self,sock, aesgcm):
-        payload = sock.recv(65536)
-        if not payload:
-            raise ConnectionError("Conexão encerrada")
+    def recv_msg(self, sock, aesgcm):
+        header = self.recvall(sock, 4)
+        msg_len = struct.unpack("!I", header)[0]
 
-        nonce = payload[:12]
-        ciphertext = payload[12:]
-        decrypted = aesgcm.decrypt(nonce, ciphertext, None)
-        return json.loads(decrypted.decode())
+        body = self.recvall(sock, msg_len)
+
+        nonce = body[:12]
+        ciphertext = body[12:]
+
+        plaintext = aesgcm.decrypt(nonce, ciphertext, None)
+        return json.loads(plaintext.decode())
     def sender_loop(self, sock, aesgcm):
         try:
             while self.controle_ativo:
-                evento = self.event_queue.get()
+                try:
+                    evento = self.event_queue.get(timeout=1)
+                except Empty:
+                    continue  # sem evento, segue o loop
+
                 if evento is None:
                     break
+
                 self.send_msg(sock, aesgcm, evento)
         except Exception as e:
             print("[SERVIDOR] Erro no envio:", e)
             self.controle_ativo = False
-    def enviar_evento(self, sock, aesgcm, evento):
-        self.send_msg(sock, aesgcm, evento)
     def iniciar_teclado(self):
         def on_press(key):
             if not self.controle_ativo:
                 return
-            try:
-                k = key.char
-            except AttributeError:
-                k = str(key)
 
-            self.event_queue.put( {
-                "type": "CONTROL_EVENT",
-                "device": "keyboard",
-                "action": "press",
-                "key": k
-            })
+            if isinstance(key, keyboard.Key):
+                payload = {
+                    "type": "CONTROL_EVENT",
+                    "device": "keyboard",
+                    "action": "press",
+                    "key_type": "special",
+                    "key": key.name
+                }
+            else:
+                payload = {
+                    "type": "CONTROL_EVENT",
+                    "device": "keyboard",
+                    "action": "press",
+                    "key_type": "char",
+                    "key": key.char
+                }
+
+            self.event_queue.put(payload)
 
         def on_release(key):
-            self.event_queue.put({
-                "type": "CONTROL_EVENT",
-                "device": "keyboard",
-                "action": "release",
-                "key": str(key)
-            })
+            if not self.controle_ativo:
+                return
 
-        listener = keyboard.Listener(on_press=on_press, on_release=on_release)
+            if isinstance(key, keyboard.Key):
+                payload = {
+                    "type": "CONTROL_EVENT",
+                    "device": "keyboard",
+                    "action": "release",
+                    "key_type": "special",
+                    "key": key.name
+                }
+            else:
+                payload = {
+                    "type": "CONTROL_EVENT",
+                    "device": "keyboard",
+                    "action": "release",
+                    "key_type": "char",
+                    "key": key.char
+                }
+
+            self.event_queue.put(payload)
+
+        listener = keyboard.Listener(
+            on_press=on_press,
+            on_release=on_release
+        )
         listener.start()
         return listener
     
     def iniciar_mouse(self):
-        last_move = time.time()
+        last_x, last_y = None, None
+        last_time = 0
 
         def on_move(x, y):
-            nonlocal last_move
+            nonlocal last_x, last_y, last_time
+
             if not self.controle_ativo:
                 return
-            if time.time() - last_move < 0.02:
-                return
-            
-            last_move = time.time()
 
+            now = time.time()
+            if now - last_time < 0.02:
+                return
+
+            if last_x is None:
+                last_x, last_y = x, y
+                return
+
+            dx = x - last_x
+            dy = y - last_y
+
+            if abs(dx) < 2 and abs(dy) < 2:
+                return
+        
+            last_x, last_y = x, y
+            last_time = now
+            print("Mouse move capturado")
             self.event_queue.put({
                 "type": "CONTROL_EVENT",
                 "device": "mouse",
                 "action": "move",
-                "x": x,
-                "y": y
+                "dx": dx,
+                "dy": dy
             })
+
 
         def on_click(x, y, button, pressed):
             if not self.controle_ativo:
                 return
+
             self.event_queue.put({
                 "type": "CONTROL_EVENT",
                 "device": "mouse",
@@ -421,10 +488,13 @@ class DiscoveryServer:
                         sock.close()
                         break
 
-                    sock.sendall(public_key.public_bytes(
-                    encoding=serialization.Encoding.PEM,
-                    format=serialization.PublicFormat.SubjectPublicKeyInfo
-                    ))
+                    server_public_pem = public_key.public_bytes(
+                        encoding=serialization.Encoding.PEM,
+                        format=serialization.PublicFormat.SubjectPublicKeyInfo
+                    )
+
+                    header = struct.pack("!I", len(server_public_pem))
+                    sock.sendall(header + server_public_pem)
 
                     encrypted_aes = sock.recv(256)
                     aes_key = private_key.decrypt(
@@ -452,3 +522,4 @@ class DiscoveryServer:
 if __name__ == "__main__":
     DiscoveryServer().start()
     
+

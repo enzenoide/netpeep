@@ -158,6 +158,50 @@ class DiscoveryServer:
 
         plaintext = aesgcm.decrypt(nonce, ciphertext, None)
         return json.loads(plaintext.decode())
+    def log_auditoria(self, ip, evento):
+        os.makedirs("logs", exist_ok=True)
+        logfile = os.path.join("logs", "controle_remoto.json")
+
+        registro = {
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "ip": ip,
+            "device": evento.get("device"),
+            "action": evento.get("action"),
+            "details": {}
+        }
+
+        if evento.get("device") == "keyboard":
+            registro["details"] = {
+                "key": evento.get("key"),
+                "type": evento.get("key_type")
+            }
+
+        elif evento.get("device") == "mouse":
+            if evento.get("action") == "move":
+                registro["details"] = {
+                    "dx": evento.get("dx"),
+                    "dy": evento.get("dy")
+                }
+            elif evento.get("action") == "click":
+                registro["details"] = {
+                    "button": evento.get("button"),
+                    "pressed": evento.get("pressed")
+                }
+
+        # carrega histórico
+        if os.path.exists(logfile):
+            with open(logfile, "r", encoding="utf-8") as f:
+                try:
+                    historico = json.load(f)
+                except json.JSONDecodeError:
+                    historico = []
+        else:
+            historico = []
+
+        historico.append(registro)
+
+        with open(logfile, "w", encoding="utf-8") as f:
+            json.dump(historico, f, indent=4, ensure_ascii=False)
     def sender_loop(self, sock, aesgcm):
         try:
             while self.controle_ativo:
@@ -170,6 +214,12 @@ class DiscoveryServer:
                     break
 
                 self.send_msg(sock, aesgcm, evento)
+
+                try:
+                    ip = sock.getpeername()[0]
+                    self.log_auditoria(ip, evento)
+                except:
+                    pass
         except Exception as e:
             print("[SERVIDOR] Erro no envio:", e)
             self.controle_ativo = False
@@ -253,7 +303,6 @@ class DiscoveryServer:
         
             last_x, last_y = x, y
             last_time = now
-            print("Mouse move capturado")
             self.event_queue.put({
                 "type": "CONTROL_EVENT",
                 "device": "mouse",

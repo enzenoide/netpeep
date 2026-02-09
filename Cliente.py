@@ -176,14 +176,14 @@ class MonitorarSistema:
             print(f"[TCP] Conexão de {addr}")
 
             try:
-                # 1️⃣ envia chave pública do cliente
+                # envia chave pública do cliente
                 client_public_pem = public_key.public_bytes(
                     encoding=serialization.Encoding.PEM,
                     format=serialization.PublicFormat.SubjectPublicKeyInfo
                 )
                 conn.sendall(client_public_pem)
 
-                # 2️⃣ recebe chave pública do servidor
+                # recebe chave pública do servidor
                 header = self.recvall(conn, 4)
                 pem_len = struct.unpack("!I", header)[0]
                 server_public_pem = self.recvall(conn, pem_len)

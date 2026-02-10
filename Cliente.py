@@ -193,7 +193,6 @@ class MonitorarSistema:
                     continue
 
                 public_key_server = serialization.load_pem_public_key(server_public_pem)
-
                 # 3️⃣ gera AES e envia criptografada
                 aes_key = os.urandom(32)
                 encrypted_aes = public_key_server.encrypt(
